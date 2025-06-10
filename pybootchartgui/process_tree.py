@@ -46,7 +46,7 @@ class ProcessTree:
         if psstats is None:
             process_list = kernel
         elif kernel is None:
-            process_list = psstats.process_map.values()
+            process_list = list(psstats.process_map.values())
         else:
             process_list = list(kernel) + list(psstats.process_map.values())
         self.process_list = sorted(process_list, key = lambda p: p.pid)
@@ -232,7 +232,7 @@ class ProcessTree:
         for p in process_subtree:
             if processes in processes and len(p.child_list) > 0:
                 subtreemap = self.getProcessMap(p.child_list)
-                for child in subtreemap.values():
+                for child in list(subtreemap.values()):
                     self.merge_processes(p, child)
                     num_removed += len(subtreemap)
                     p.child_list = []

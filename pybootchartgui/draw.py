@@ -597,14 +597,14 @@ class CumlSample:
 		self.samples.extend (proc.samples)
 		self.samples.sort (key = lambda p: p.time)
 
-	def next(self):
+	def __next__(self):
 		global palette_idx
 		palette_idx += HSV_STEP
 		return palette_idx
 
 	def get_color(self):
 		if self.color is None:
-			i = self.next() % HSV_MAX_MOD
+			i = next(self) % HSV_MAX_MOD
 			h = 0.0
 			if i != 0:
 				h = (1.0 * i) / HSV_MAX_MOD
@@ -668,7 +668,7 @@ def draw_cuml_graph(ctx, proc_tree, chart_bounds, duration, sec_w, stat_type):
 	labels = []
 
 	# render each pid in order
-	for cs in m_proc_list.values():
+	for cs in list(m_proc_list.values()):
 		row = {}
 		cuml = 0.0
 

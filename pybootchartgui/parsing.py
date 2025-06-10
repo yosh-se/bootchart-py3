@@ -14,7 +14,7 @@
 #  along with pybootchartgui. If not, see <http://www.gnu.org/licenses/>.
 
 
-from __future__ import with_statement
+
 
 import codecs
 import itertools
@@ -72,7 +72,7 @@ class Trace:
         if options.annotate:
             for procnames in options.annotate:
                 names = [x[:15] for x in procnames.split(",")]
-                for proc in self.ps_stats.process_map.values():
+                for proc in list(self.ps_stats.process_map.values()):
                     if proc.cmd in names:
                         self.times.append(proc.start_time)
                         break
@@ -117,7 +117,7 @@ class Trace:
 
         # merge in the cmdline data
         if self.cmdline is not None:
-            for proc in self.ps_stats.process_map.values():
+            for proc in list(self.ps_stats.process_map.values()):
                 rpid = int (proc.pid // 1000)
                 if rpid in self.cmdline:
                     cmd = self.cmdline[rpid]
@@ -128,17 +128,17 @@ class Trace:
 
         # re-parent any stray orphans if we can
         if self.parent_map is not None:
-            for process in self.ps_stats.process_map.values():
+            for process in list(self.ps_stats.process_map.values()):
                 ppid = find_parent_id_for (int(process.pid // 1000))
                 if ppid:
                     process.ppid = ppid * 1000
 
         # stitch the tree together with pointers
-        for process in self.ps_stats.process_map.values():
+        for process in list(self.ps_stats.process_map.values()):
             process.set_parent (self.ps_stats.process_map)
 
         # count on fingers variously
-        for process in self.ps_stats.process_map.values():
+        for process in list(self.ps_stats.process_map.values()):
             process.calc_stats (self.ps_stats.sample_period)
 
     def crop(self, writer, crop_after):
@@ -166,7 +166,7 @@ class Trace:
                 return False
 
         names = [x[:15] for x in crop_after.split(",")]
-        for proc in self.ps_stats.process_map.values():
+        for proc in list(self.ps_stats.process_map.values()):
             if proc.cmd in names or proc.exe in names:
                 writer.info("selected proc '%s' from list (start %d)"
                             % (proc.cmd, proc.start_time))
@@ -203,11 +203,11 @@ class Trace:
         self.ps_stats.end_time = crop_at
 
         cropped_map = {}
-        for key, value in self.ps_stats.process_map.items():
+        for key, value in list(self.ps_stats.process_map.items()):
             if (value.start_time <= crop_at):
                 cropped_map[key] = value
 
-        for proc in cropped_map.values():
+        for proc in list(cropped_map.values()):
             proc.duration = min (proc.duration, crop_at - proc.start_time)
             while len (proc.samples) \
                         and proc.samples[-1].time > crop_at:
@@ -232,7 +232,7 @@ def _parse_headers(file):
     def parse(acc, line):
         (headers, last) = acc
         if '=' in line:
-            last, value = map (lambda x: x.strip(), line.split('=', 1))
+            last, value = [x.strip() for x in line.split('=', 1)]
         else:
             value = line.strip()
         headers[last] += value
@@ -359,7 +359,7 @@ def _parse_taskstats_log(writer, file):
                 continue
 
             opid, ppid, cmd = int(tokens[0]), int(tokens[1]), tokens[2]
-            cpu_ns, blkio_delay_ns, swapin_delay_ns = long(tokens[-3]), long(tokens[-2]), long(tokens[-1]),
+            cpu_ns, blkio_delay_ns, swapin_delay_ns = int(tokens[-3]), int(tokens[-2]), int(tokens[-1]),
 
             # make space for trees of pids
             opid *= 1000
@@ -464,7 +464,7 @@ def _parse_proc_disk_stat_log(file, numCpu):
 
     for time, lines in _parse_timed_blocks(file):
         sample = DiskStatSample(time)
-        relevant_tokens = [linetokens for linetokens in map (lambda x: x.split(),lines) if is_relevant_line(linetokens)]
+        relevant_tokens = [linetokens for linetokens in [x.split() for x in lines] if is_relevant_line(linetokens)]
 
         for tokens in relevant_tokens:
             disk, rsect, wsect, use = tokens[2], int(tokens[5]), int(tokens[9]), int(tokens[12])
@@ -579,12 +579,12 @@ def _parse_dmesg(writer, file):
                 process = processMap[func]
                 process.duration = (time_ms / 10) - process.start_time
             else:
-                print("corrupted init call for %s" % (func))
+                print(("corrupted init call for %s" % (func)))
 
         elif type == "async_waiting" or type == "async_continuing":
             continue # ignore
 
-    return processMap.values()
+    return list(processMap.values())
 
 #
 # Parse binary pacct accounting file output if we have one
@@ -602,7 +602,7 @@ def _parse_pacct(writer, file):
     while file.read(1) != "": # ignore flags
         ver = file.read(1)
         if ord(ver) < 3:
-            print("Invalid version 0x%x" % (ord(ver)))
+            print(("Invalid version 0x%x" % (ord(ver))))
             return None
 
         file.seek (14, 1)     # user, group etc.
@@ -625,7 +625,7 @@ def _parse_paternity_log(writer, file):
 #                       print "paternity of %d is %d" % (int(elems[0]), int(elems[1]))
             parent_map[int(elems[0])] = int(elems[1])
         else:
-            print("Odd paternity line '%s'" % (line))
+            print(("Odd paternity line '%s'" % (line)))
     return parent_map
 
 def _parse_cmdline_log(writer, file):

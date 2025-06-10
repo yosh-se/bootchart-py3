@@ -48,7 +48,7 @@ class MemSample:
         self.records[name] = value
 
     def valid(self):
-        keys = self.records.keys()
+        keys = list(self.records.keys())
         # discard incomplete samples
         return [v for v in MemSample.used_values if v not in keys] == []
 
@@ -69,7 +69,7 @@ class ProcessStats:
         self.start_time = start_time
         self.end_time = end_time
         writer.info ("%d samples, avg. sample length %f" % (self.sample_count, self.sample_period))
-        writer.info ("process list size: %d" % len (self.process_map.values()))
+        writer.info ("process list size: %d" % len (list(self.process_map.values())))
 
 class Process:
     def __init__(self, writer, pid, cmd, ppid, start_time):

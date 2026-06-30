@@ -308,15 +308,59 @@ def render_charts(ctx, options, clip, trace, curr_y, w, h, sec_w):
 	if clip_visible (clip, chart_rect):
 		draw_box_ticks (ctx, chart_rect, sec_w)
 		draw_annotations (ctx, proc_tree, trace.times, chart_rect)
+
+		cpu_stats = trace.cpu_stats
+		# Backwards compatible: cpu_stats can be List[CPUSample] or
+		# {'all': List[CPUSample], 'per_cpu': {idx: List[CPUSample]}}
+		if isinstance(cpu_stats, dict):
+			all_cpu = cpu_stats.get('all', [])
+			per_cpu = cpu_stats.get('per_cpu', {})
+		else:
+			all_cpu = cpu_stats
+			per_cpu = {}
+
 		draw_chart (ctx, IO_COLOR, True, chart_rect, \
-			    [(sample.time, sample.user + sample.sys + sample.io) for sample in trace.cpu_stats], \
+			    [(sample.time, sample.user + sample.sys + sample.io) for sample in all_cpu], \
 			    proc_tree, None)
 		# render CPU load
 		draw_chart (ctx, CPU_COLOR, True, chart_rect, \
-			    [(sample.time, sample.user + sample.sys) for sample in trace.cpu_stats], \
+			    [(sample.time, sample.user + sample.sys) for sample in all_cpu], \
 			    proc_tree, None)
 
 	curr_y = curr_y + 30 + bar_h
+
+	# If per-cpu data is available, render each core as a separate line chart
+	# (filled CPU and filled I/O wait) stacked vertically.
+	if per_cpu:
+		# deterministic per-core colors
+		def core_color(idx, alpha=1.0):
+			# Spread colors across hue wheel.
+			h = ((idx * 0.61803398875) % 1.0)
+			r, g, b = colorsys.hsv_to_rgb(h, 0.45, 0.90)
+			return (r, g, b, alpha)
+
+		ctx.set_font_size(LEGEND_FONT_SIZE)
+		# render a small legend header once
+		draw_text(ctx, "Per-core CPU utilization", TEXT_COLOR, off_x, curr_y+20)
+
+		ordered = sorted(per_cpu.items(), key=lambda kv: kv[0])
+		for idx, series in ordered:
+			chart_rect = (off_x, curr_y+30, w, bar_h)
+			if clip_visible(clip, chart_rect):
+				draw_box_ticks(ctx, chart_rect, sec_w)
+				draw_annotations(ctx, proc_tree, trace.times, chart_rect)
+				c = core_color(idx, 0.85)
+				io_c = tuple(list(c[0:3]) + [0.35])
+				draw_chart(ctx, io_c, True, chart_rect,
+					   [(s.time, s.user + s.sys + s.io) for s in series],
+					   proc_tree, None)
+				draw_chart(ctx, c, True, chart_rect,
+					   [(s.time, s.user + s.sys) for s in series],
+					   proc_tree, None)
+				# core label
+				draw_text(ctx, f"cpu{idx}", TEXT_COLOR, off_x + 5, curr_y + 30 + 15)
+
+			curr_y = curr_y + 30 + bar_h
 
 	# render second chart
 	draw_legend_line(ctx, "Disk throughput", DISK_TPUT_COLOR, off_x, curr_y+20, leg_s)
@@ -469,7 +513,7 @@ def draw_header (ctx, headers, duration):
     toshow = [
       ('system.uname', 'uname', lambda s: s),
       ('system.release', 'release', lambda s: s),
-      ('system.cpu', 'CPU', lambda s: re.sub('model name\s*:\s*', '', s, 1)),
+      ('system.cpu', 'CPU', lambda s: re.sub(r'model name\s*:\s*', '', s, 1)),
       ('system.kernel.options', 'kernel options', lambda s: s),
     ]
 

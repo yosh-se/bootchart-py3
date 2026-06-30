@@ -83,7 +83,13 @@ class TestBCParser(unittest.TestCase):
 	
 	def testparseProcStatLog(self):
 		trace = parsing.Trace(writer, args, options)
-		samples = parsing.parse_file(writer, trace, self.mk_fname('proc_stat.log')).cpu_stats
+		cpu_stats = parsing.parse_file(writer, trace, self.mk_fname('proc_stat.log')).cpu_stats
+		# Backwards compat: cpu_stats can be List[CPUSample] or
+		# {'all': List[CPUSample], 'per_cpu': {idx: List[CPUSample]}}
+		if isinstance(cpu_stats, dict):
+			samples = cpu_stats.get('all', [])
+		else:
+			samples = cpu_stats
 		self.assertEqual(141, len(samples))
 
 		stat_data = open(self.mk_fname('extract.proc_stat.log'))

@@ -296,6 +296,15 @@ def clip_visible(clip, rect):
 
 def render_charts(ctx, options, clip, trace, curr_y, w, h, sec_w):
 	proc_tree = options.proc_tree(trace)
+	cpu_stats = trace.cpu_stats
+	# Backwards compatible: cpu_stats can be List[CPUSample] or
+	# {'all': List[CPUSample], 'per_cpu': {idx: List[CPUSample]}}
+	if isinstance(cpu_stats, dict):
+		all_cpu = cpu_stats.get('all', [])
+		per_cpu = cpu_stats.get('per_cpu', {})
+	else:
+		all_cpu = cpu_stats
+		per_cpu = {}
 
 	# render bar legend
 	ctx.set_font_size(LEGEND_FONT_SIZE)
@@ -308,16 +317,6 @@ def render_charts(ctx, options, clip, trace, curr_y, w, h, sec_w):
 	if clip_visible (clip, chart_rect):
 		draw_box_ticks (ctx, chart_rect, sec_w)
 		draw_annotations (ctx, proc_tree, trace.times, chart_rect)
-
-		cpu_stats = trace.cpu_stats
-		# Backwards compatible: cpu_stats can be List[CPUSample] or
-		# {'all': List[CPUSample], 'per_cpu': {idx: List[CPUSample]}}
-		if isinstance(cpu_stats, dict):
-			all_cpu = cpu_stats.get('all', [])
-			per_cpu = cpu_stats.get('per_cpu', {})
-		else:
-			all_cpu = cpu_stats
-			per_cpu = {}
 
 		draw_chart (ctx, IO_COLOR, True, chart_rect, \
 			    [(sample.time, sample.user + sample.sys + sample.io) for sample in all_cpu], \

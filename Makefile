@@ -89,7 +89,9 @@ pybootchartgui/main.py: pybootchartgui/main.py.in
 
 py-install-compile: pybootchartgui/main.py
 	install -d $(DESTDIR)$(PY_SITEDIR)/pybootchartgui
+	install -d $(DESTDIR)$(PY_SITEDIR)/pybootchartgui/themes
 	cp pybootchartgui/*.py $(DESTDIR)$(PY_SITEDIR)/pybootchartgui
+	cp pybootchartgui/themes/*.json $(DESTDIR)$(PY_SITEDIR)/pybootchartgui/themes
 	install -D -m 755 pybootchartgui.py $(DESTDIR)$(BINDIR)/pybootchartgui
 	[ -z "$(NO_PYTHON_COMPILE)" ] && ( cd $(DESTDIR)$(PY_SITEDIR)/pybootchartgui ; \
 		$(PYTHON) $(PY_LIBDIR)/py_compile.py *.py ; \

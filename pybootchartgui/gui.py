@@ -19,6 +19,7 @@ gi.require_version('Gdk', '3.0')
 gi.require_version('GObject', '2.0')
 from gi.repository import Gtk, Gdk, GObject
 from . import draw
+from . import themes
 from .draw import RenderOptions
 
 class PyBootchartWidget(Gtk.DrawingArea):
@@ -267,7 +268,10 @@ class PyBootchartShell(Gtk.Box):
     def __init__(self, window, trace, options, xscale):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
+        self.window = window
         self.chart_widget = PyBootchartWidget(trace, options, xscale)
+        self.theme_combo = None
+        self.theme_combo_changed_signal_id = None
 
         # Create a UIManager instance
         uimanager = self.uimanager = Gtk.UIManager()
@@ -307,6 +311,17 @@ class PyBootchartShell(Gtk.Box):
         toolbar = uimanager.get_widget('/ToolBar')
         hbox.pack_start(toolbar, True, True, 0)
 
+        theme_combo = Gtk.ComboBoxText()
+        theme_combo.append(themes.AUTO_THEME_NAME, "Auto")
+        theme_combo.append('light', "Light")
+        theme_combo.append('dark', "Dark")
+        theme_combo.set_active_id(options.app_options.theme)
+        self.theme_combo_changed_signal_id = theme_combo.connect('changed', self.on_theme_changed)
+        self.theme_combo = theme_combo
+
+        hbox.pack_start(Gtk.Label(label="Theme"), False, True, 0)
+        hbox.pack_start(theme_combo, False, True, 0)
+
         if not options.kernel_only:
             # Misc. options
             button = Gtk.CheckButton(label="Show more")
@@ -320,15 +335,43 @@ class PyBootchartShell(Gtk.Box):
 
         self.pack_start(hbox, False, False, 0)
         self.pack_start(scrolled, True, True, 0)
+        if hasattr(window, 'register_shell'):
+            window.register_shell(self)
         self.show_all()
 
     def grab_focus(self, window):
         window.set_focus(self.chart_widget)
 
+    def on_theme_changed(self, combo):
+        theme_mode = combo.get_active_id()
+        if theme_mode is None:
+            return
+        self.window.apply_theme_mode(theme_mode)
+
+    def set_theme_mode(self, theme_mode):
+        if self.theme_combo is None:
+            return
+        self.theme_combo.handler_block(self.theme_combo_changed_signal_id)
+        self.theme_combo.set_active_id(theme_mode)
+        self.theme_combo.handler_unblock(self.theme_combo_changed_signal_id)
+
+    def queue_chart_draw(self):
+        self.chart_widget.queue_draw()
+
 class PyBootchartWindow(Gtk.Window):
 
     def __init__(self, trace, app_options):
         super().__init__()
+
+        self.app_options = app_options
+        self.shells = []
+        self.gtk_settings = Gtk.Settings.get_default()
+        if not hasattr(self.app_options, 'theme'):
+            self.app_options.theme = themes.AUTO_THEME_NAME
+        self.original_prefer_dark_theme = False
+        if self.gtk_settings is not None:
+            self.original_prefer_dark_theme = self.gtk_settings.get_property('gtk-application-prefer-dark-theme')
+            self.gtk_settings.connect('notify::gtk-theme-name', self.on_gtk_theme_name_changed)
 
         window = self
         window.set_title("Bootchart %s" % trace.filename)
@@ -350,8 +393,57 @@ class PyBootchartWindow(Gtk.Window):
             kernel_tree = PyBootchartShell(window, trace, kernel_opts, 5.0)
             tab_page.append_page(kernel_tree, Gtk.Label(label="Kernel boot"))
 
+        self.apply_theme_mode(self.app_options.theme)
         full_tree.grab_focus(self)
         self.show_all()
+
+    def register_shell(self, shell):
+        self.shells.append(shell)
+
+    def queue_redraw_all(self):
+        for shell in self.shells:
+            shell.queue_chart_draw()
+
+    def sync_theme_controls(self):
+        for shell in self.shells:
+            shell.set_theme_mode(self.app_options.theme)
+
+    def resolve_auto_theme(self):
+        return themes.resolve_theme_name(
+            themes.AUTO_THEME_NAME,
+            themes.gtk_settings_prefers_dark(self.gtk_settings))
+
+    def apply_theme_mode(self, theme_mode):
+        if theme_mode not in themes.THEME_MODES:
+            theme_mode = themes.AUTO_THEME_NAME
+
+        self.app_options.theme = theme_mode
+        if theme_mode == themes.AUTO_THEME_NAME:
+            if self.gtk_settings is not None:
+                self.gtk_settings.set_property(
+                    'gtk-application-prefer-dark-theme',
+                    self.original_prefer_dark_theme)
+            self.app_options.resolved_theme = self.resolve_auto_theme()
+        else:
+            if self.gtk_settings is not None:
+                self.gtk_settings.set_property(
+                    'gtk-application-prefer-dark-theme',
+                    theme_mode == 'dark')
+            self.app_options.resolved_theme = theme_mode
+
+        self.sync_theme_controls()
+        self.queue_redraw_all()
+
+    def on_gtk_theme_name_changed(self, settings, pspec):
+        if self.app_options.theme != themes.AUTO_THEME_NAME:
+            return
+
+        resolved_theme = self.resolve_auto_theme()
+        if getattr(self.app_options, 'resolved_theme', None) == resolved_theme:
+            return
+
+        self.app_options.resolved_theme = resolved_theme
+        self.queue_redraw_all()
 
 def show(trace, options):
     win = PyBootchartWindow(trace, options)

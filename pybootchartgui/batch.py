@@ -15,6 +15,7 @@
 
 import cairo
 from . import draw
+from . import themes
 from .draw import RenderOptions
 
 def render(writer, trace, app_options, filename):
@@ -35,6 +36,9 @@ def render(writer, trace, app_options, filename):
         return 10
 
     make_surface, write_surface = handlers[fmt]
+    app_options.resolved_theme = themes.resolve_theme_name(
+        getattr(app_options, 'theme', themes.AUTO_THEME_NAME),
+        False)
     options = RenderOptions (app_options)
     (w, h) = draw.extents (options, 1.0, trace)
     w = max (w, draw.MIN_IMG_W)

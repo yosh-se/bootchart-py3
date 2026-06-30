@@ -117,6 +117,13 @@ class PyBootchartWidget(Gtk.DrawingArea):
         self.options.app_options.show_all = button.get_property('active')
         self.queue_draw()
 
+    def process_label_align_toggled(self, button):
+        if button.get_property('active'):
+            self.options.app_options.process_label_align = 'left'
+        else:
+            self.options.app_options.process_label_align = 'center'
+        self.queue_draw()
+
     POS_INCREMENT = 100
 
     def on_key_press_event(self, widget, event):
@@ -304,6 +311,11 @@ class PyBootchartShell(Gtk.Box):
             # Misc. options
             button = Gtk.CheckButton(label="Show more")
             button.connect('toggled', self.chart_widget.show_toggled)
+            hbox.pack_start(button, False, True, 0)
+
+            button = Gtk.CheckButton(label="Left-align labels")
+            button.set_active(options.app_options.process_label_align == 'left')
+            button.connect('toggled', self.chart_widget.process_label_align_toggled)
             hbox.pack_start(button, False, True, 0)
 
         self.pack_start(hbox, False, False, 0)

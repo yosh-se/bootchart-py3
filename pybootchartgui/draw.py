@@ -109,7 +109,7 @@ SIG_FONT_SIZE = 14
 SIGNATURE = "http://github.com/mmeeks/bootchart"
 
 # Process dependency line color.
-DEP_COLOR = (0.75, 0.75, 0.75, 1.0)
+DEP_COLOR = (0.50, 0.50, 0.50, 1.0)
 # Process dependency line stroke.
 DEP_STROKE = 1.0
 
@@ -167,7 +167,11 @@ def draw_legend_line(ctx, label, fill_color, x, y, s):
 
 def draw_label_in_box(ctx, color, label, x, y, w, maxx):
 	label_w = ctx.text_extents(label)[2]
-	label_x = x + w / 2 - label_w / 2
+	label_align = getattr(OPTIONS, 'process_label_align', 'left')
+	if label_align == 'center':
+		label_x = x + w / 2 - label_w / 2
+	else:
+		label_x = x + 5
 	if label_w + 10 > w:
 		label_x = x + w + 5
 	if label_x + label_w > maxx:

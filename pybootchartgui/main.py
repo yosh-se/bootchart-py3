@@ -55,6 +55,8 @@ def _mk_options_parser():
 			  help="show process ids in the bootchart as 'processname [pid]'")
 	parser.add_option("--show-all", action="store_true", dest="show_all", default=False,
 			  help="show all process information in the bootchart as '/process/path/exe [pid] [args]'")
+	parser.add_option("--process-label-align", dest="process_label_align", default="left", choices=["left", "center"],
+			  help="align process labels inside bars: left or center; default left")
 	parser.add_option("--crop-after", dest="crop_after", metavar="PROCESS", default=None,
 			  help="crop chart when idle after PROCESS is started")
 	parser.add_option("--annotate", action="append", dest="annotate", metavar="PROCESS", default=None,

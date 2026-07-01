@@ -338,6 +338,11 @@ def _max_series_value(*series_list):
 		return 1.0
 	return max(values)
 
+
+def _clip_extents_to_rect(clip_extents):
+	x1, y1, x2, y2 = clip_extents
+	return (x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1))
+
 def extents(options, xscale, trace):
 	proc_tree = options.proc_tree(trace)
 	w = int (proc_tree.duration * sec_w_base * xscale / 100) + 2*off_x
@@ -517,7 +522,7 @@ def render(ctx, options, xscale, trace):
 	proc_tree = options.proc_tree (trace)
 
 	# x, y, w, h
-	clip = ctx.clip_extents()
+	clip = _clip_extents_to_rect(ctx.clip_extents())
 
 	sec_w = int (xscale * sec_w_base)
 	ctx.set_line_width(1.0)

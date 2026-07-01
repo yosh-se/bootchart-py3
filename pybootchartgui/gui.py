@@ -272,6 +272,7 @@ class PyBootchartShell(Gtk.Box):
         self.chart_widget = PyBootchartWidget(trace, options, xscale)
         self.theme_combo = None
         self.theme_combo_changed_signal_id = None
+        self.process_search_entry = None
 
         # Create a UIManager instance
         uimanager = self.uimanager = Gtk.UIManager()
@@ -323,6 +324,16 @@ class PyBootchartShell(Gtk.Box):
         hbox.pack_start(theme_combo, False, True, 0)
 
         if not options.kernel_only:
+            search_entry = Gtk.Entry()
+            search_entry.set_width_chars(16)
+            search_entry.set_placeholder_text("Highlight process")
+            search_entry.set_text(getattr(options.app_options, 'process_search', ''))
+            search_entry.connect('changed', self.on_process_search_changed)
+            self.process_search_entry = search_entry
+
+            hbox.pack_start(Gtk.Label(label="Search"), False, True, 0)
+            hbox.pack_start(search_entry, False, True, 0)
+
             # Misc. options
             button = Gtk.CheckButton(label="Show more")
             button.connect('toggled', self.chart_widget.show_toggled)
@@ -347,6 +358,13 @@ class PyBootchartShell(Gtk.Box):
         if theme_mode is None:
             return
         self.window.apply_theme_mode(theme_mode)
+
+    def on_process_search_changed(self, entry):
+        self.chart_widget.options.app_options.process_search = entry.get_text()
+        if hasattr(self.window, 'queue_redraw_all'):
+            self.window.queue_redraw_all()
+        else:
+            self.chart_widget.queue_draw()
 
     def set_theme_mode(self, theme_mode):
         if self.theme_combo is None:

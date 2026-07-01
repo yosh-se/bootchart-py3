@@ -14,6 +14,7 @@
 #  along with pybootchartgui. If not, see <http://www.gnu.org/licenses/>.
 
 
+import os
 import cairo
 import math
 import re
@@ -120,6 +121,35 @@ def _load_render_theme(app_options):
 		except themes.ThemeError:
 			resolved_theme = themes.DEFAULT_THEME_NAME
 	return themes.load_theme(resolved_theme)
+
+
+def _search_highlight_color():
+	color = _theme_color('annotation')
+	return (color[0], color[1], color[2], 1.0)
+
+
+def process_matches_search(proc, search_term):
+	term = (search_term or '').strip().lower()
+	if not term:
+		return False
+
+	haystacks = []
+
+	def add_haystack(value):
+		if not value:
+			return
+		lower = str(value).lower()
+		haystacks.append(lower)
+		base = os.path.basename(lower)
+		if base and base != lower:
+			haystacks.append(base)
+
+	add_haystack(getattr(proc, 'cmd', None))
+	add_haystack(getattr(proc, 'exe', None))
+	for arg in getattr(proc, 'args', []) or []:
+		add_haystack(arg)
+
+	return any(term in value for value in haystacks)
 
 # Convert ps process state to an int
 def get_proc_state(flag):
@@ -600,9 +630,16 @@ def draw_header (ctx, headers, duration):
 def draw_processes_recursively(ctx, proc, proc_tree, y, proc_h, rect, clip) :
 	x = rect[0] +  ((proc.start_time - proc_tree.start_time) * rect[2] / proc_tree.duration)
 	w = ((proc.duration) * rect[2] / proc_tree.duration)
+	highlighted = process_matches_search(proc, getattr(OPTIONS, 'process_search', ''))
 
 	draw_process_activity_colors(ctx, proc, proc_tree, x, y, w, proc_h, rect, clip)
 	draw_rect(ctx, _theme_color('proc_border'), (x, y, w, proc_h))
+	if highlighted:
+		highlight_color = _search_highlight_color()
+		draw_fill_rect(ctx, highlight_color, (x, y, min(max(w, 1), 3), proc_h))
+		ctx.set_line_width(2.0)
+		draw_rect(ctx, highlight_color, (x, y, w, proc_h))
+		ctx.set_line_width(1.0)
 	ipid = int(proc.pid)
 	if not OPTIONS.show_all:
 		cmdString = proc.cmd
@@ -616,7 +653,8 @@ def draw_processes_recursively(ctx, proc, proc_tree, y, proc_h, rect, clip) :
 		else:
 			cmdString = cmdString + " " + proc.exe
 
-	draw_label_in_box(ctx, _theme_color('proc_text'), cmdString, x, y + proc_h - 4, w, rect[0] + rect[2])
+	label_color = _search_highlight_color() if highlighted else _theme_color('proc_text')
+	draw_label_in_box(ctx, label_color, cmdString, x, y + proc_h - 4, w, rect[0] + rect[2])
 
 	next_y = y + proc_h
 	for child in proc.child_list:

@@ -45,6 +45,7 @@ class Trace:
         self.ps_stats = None
         self.taskstats = None
         self.cpu_stats = None
+        self.proc_stat_metrics = None
         self.cmdline = None
         self.kernel = None
         self.kernel_tree = None
@@ -175,7 +176,12 @@ class Trace:
             writer.warn("no selected crop proc '%s' in list" % crop_after)
 
 
-        cpu_util = [(sample.time, sample.user + sample.sys + sample.io) for sample in self.cpu_stats]
+        if isinstance(self.cpu_stats, dict):
+            cpu_samples = self.cpu_stats.get('all', [])
+        else:
+            cpu_samples = self.cpu_stats
+
+        cpu_util = [(sample.time, sample.user + sample.sys + sample.io) for sample in cpu_samples]
         disk_util = [(sample.time, sample.util) for sample in self.disk_stats]
 
         idle = None
@@ -193,12 +199,20 @@ class Trace:
 
         crop_at = idle + 300
         writer.info ("cropping at time %d" % crop_at)
-        while len (self.cpu_stats) \
-                    and self.cpu_stats[-1].time > crop_at:
-            self.cpu_stats.pop()
+        while len (cpu_samples) \
+                    and cpu_samples[-1].time > crop_at:
+            cpu_samples.pop()
+        if isinstance(self.cpu_stats, dict):
+            for samples in list(self.cpu_stats.get('per_cpu', {}).values()):
+                while len(samples) and samples[-1].time > crop_at:
+                    samples.pop()
         while len (self.disk_stats) \
                     and self.disk_stats[-1].time > crop_at:
             self.disk_stats.pop()
+        if self.proc_stat_metrics is not None:
+            for series in list(self.proc_stat_metrics.values()):
+                while len(series) and series[-1][0] > crop_at:
+                    series.pop()
 
         self.ps_stats.end_time = crop_at
 
@@ -313,7 +327,10 @@ def _parse_proc_ps_log(writer, file):
             ppid *= 1000
             if pid in processMap:
                 process = processMap[pid]
-                process.cmd = cmd.strip('()') # why rename after latest name??
+                new_cmd = cmd.strip('()')
+                if process.exe == process.cmd:
+                    process.exe = new_cmd
+                process.cmd = new_cmd # why rename after latest name??
             else:
                 process = Process(writer, pid, cmd.strip('()'), ppid, min(time, stime))
                 processMap[pid] = process
@@ -433,10 +450,19 @@ def _parse_proc_stat_log(file):
     """
     all_samples = []
     per_cpu_samples = defaultdict(list)
+    proc_stat_metrics = {
+        'procs_running': [],
+        'procs_blocked': [],
+        'ctxt_rate': [],
+        'intr_rate': [],
+        'softirq_rate': [],
+    }
 
     # last observed raw times
     last_all = None
     last_per_cpu = {}
+    last_counters = None
+    last_counter_time = None
 
     for time, lines in _parse_timed_blocks(file):
         if not lines:
@@ -445,11 +471,29 @@ def _parse_proc_stat_log(file):
         # Find all cpu lines in this block. Format:
         # cpu  user nice system idle iowait irq softirq [steal [guest [guest_nice]]]
         cpu_lines = []
+        counters = {}
         for line in lines:
             if not line:
                 continue
             if line.startswith('cpu'):
                 cpu_lines.append(line)
+                continue
+
+            tokens = line.split()
+            if len(tokens) < 2:
+                continue
+
+            name = tokens[0]
+            if name == 'procs_running':
+                counters['procs_running'] = int(tokens[1])
+            elif name == 'procs_blocked':
+                counters['procs_blocked'] = int(tokens[1])
+            elif name == 'ctxt':
+                counters['ctxt'] = int(tokens[1])
+            elif name == 'intr':
+                counters['intr'] = int(tokens[1])
+            elif name == 'softirq':
+                counters['softirq'] = int(tokens[1])
 
         if not cpu_lines:
             continue
@@ -502,11 +546,29 @@ def _parse_proc_stat_log(file):
                     per_cpu_samples[idx].append(mk_sample(now, prev))
                 last_per_cpu[idx] = now
 
+        if 'procs_running' in counters:
+            proc_stat_metrics['procs_running'].append((time, float(counters['procs_running'])))
+        if 'procs_blocked' in counters:
+            proc_stat_metrics['procs_blocked'].append((time, float(counters['procs_blocked'])))
+
+        if last_counters is not None and last_counter_time is not None:
+            interval = max(time - last_counter_time, 1)
+            for counter_name, metric_name in (
+                    ('ctxt', 'ctxt_rate'),
+                    ('intr', 'intr_rate'),
+                    ('softirq', 'softirq_rate')):
+                if counter_name in counters and counter_name in last_counters:
+                    delta = counters[counter_name] - last_counters[counter_name]
+                    proc_stat_metrics[metric_name].append((time, float(delta) * 100.0 / interval))
+
+        last_counters = counters
+        last_counter_time = time
+
     # Backwards compatibility: old code expects a list of CPUSample
     if not per_cpu_samples:
-        return all_samples
+        return all_samples, proc_stat_metrics
 
-    return {'all': all_samples, 'per_cpu': dict(per_cpu_samples)}
+    return {'all': all_samples, 'per_cpu': dict(per_cpu_samples)}, proc_stat_metrics
 
 def _parse_proc_disk_stat_log(file, numCpu):
     """
@@ -733,7 +795,7 @@ def _do_parse(writer, state, name, file):
         state.ps_stats = _parse_taskstats_log(writer, file)
         state.taskstats = True
     elif name == "proc_stat.log":
-        state.cpu_stats = _parse_proc_stat_log(file)
+        state.cpu_stats, state.proc_stat_metrics = _parse_proc_stat_log(file)
     elif name == "proc_meminfo.log":
         state.mem_stats = _parse_proc_meminfo_log(file)
     elif name == "dmesg":

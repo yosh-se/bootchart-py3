@@ -73,6 +73,9 @@ STATE_SLEEPING  = 2
 STATE_WAITING   = 3
 STATE_STOPPED   = 4
 STATE_ZOMBIE    = 5
+STATE_IDLE      = 6
+STATE_DEAD      = 7
+STATE_PAGING    = 8
 
 # CumulativeStats Types
 STAT_TYPE_CPU = 0
@@ -93,6 +96,7 @@ def _state_color(state):
 		_theme_color('proc_waiting'),
 		_theme_color('proc_stopped'),
 		_theme_color('proc_zombie'),
+		_theme_color('proc_idle'),
 		_theme_color('proc_dead'),
 		_theme_color('proc_paging'),
 	]
@@ -119,7 +123,16 @@ def _load_render_theme(app_options):
 
 # Convert ps process state to an int
 def get_proc_state(flag):
-	return "RSDTZXW".find(flag) + 1
+	return {
+		'R': STATE_RUNNING,
+		'S': STATE_SLEEPING,
+		'D': STATE_WAITING,
+		'T': STATE_STOPPED,
+		'Z': STATE_ZOMBIE,
+		'I': STATE_IDLE,
+		'X': STATE_DEAD,
+		'W': STATE_PAGING,
+	}.get(flag, STATE_UNDEFINED)
 
 def draw_text(ctx, text, color, x, y):
 	ctx.set_source_rgba(*color)
@@ -253,7 +266,7 @@ def draw_chart(ctx, color, fill, chart_bounds, data, proc_tree, data_range):
 
 bar_h = 55
 meminfo_bar_h = 2 * bar_h
-header_h = 110 + 2 * (30 + bar_h) + 1 * (30 + meminfo_bar_h)
+header_text_h = 110
 # offsets
 off_x, off_y = 10, 10
 sec_w_base = 50 # the width of a second
@@ -263,12 +276,44 @@ MIN_IMG_W = 800
 CUML_HEIGHT = 2000 # Increased value to accomodate CPU and I/O Graphs
 OPTIONS = None
 
+
+def _split_cpu_stats(cpu_stats):
+	if isinstance(cpu_stats, dict):
+		return cpu_stats.get('all', []), cpu_stats.get('per_cpu', {})
+	return cpu_stats, {}
+
+
+def _chart_stack_height(trace):
+	all_cpu, per_cpu = _split_cpu_stats(trace.cpu_stats)
+	proc_stat_metrics = getattr(trace, 'proc_stat_metrics', None) or {}
+	sections = 0
+	if all_cpu:
+		sections += 1
+	sections += len(per_cpu)
+	if proc_stat_metrics.get('procs_running') or proc_stat_metrics.get('procs_blocked'):
+		sections += 1
+	if proc_stat_metrics.get('ctxt_rate') or proc_stat_metrics.get('intr_rate') or proc_stat_metrics.get('softirq_rate'):
+		sections += 1
+	if trace.disk_stats:
+		sections += 1
+	height = header_text_h + sections * (30 + bar_h)
+	if trace.mem_stats:
+		height += 30 + meminfo_bar_h
+	return height
+
+
+def _max_series_value(*series_list):
+	values = [point[1] for series in series_list for point in series]
+	if not values:
+		return 1.0
+	return max(values)
+
 def extents(options, xscale, trace):
 	proc_tree = options.proc_tree(trace)
 	w = int (proc_tree.duration * sec_w_base * xscale / 100) + 2*off_x
 	h = proc_h * proc_tree.num_proc + 2 * off_y
 	if options.charts:
-		h += header_h
+		h += _chart_stack_height(trace)
 	if proc_tree.taskstats and options.cumulative:
 		h += CUML_HEIGHT + 4 * off_y
 	return (w, h)
@@ -282,15 +327,8 @@ def clip_visible(clip, rect):
 
 def render_charts(ctx, options, clip, trace, curr_y, w, h, sec_w):
 	proc_tree = options.proc_tree(trace)
-	cpu_stats = trace.cpu_stats
-	# Backwards compatible: cpu_stats can be List[CPUSample] or
-	# {'all': List[CPUSample], 'per_cpu': {idx: List[CPUSample]}}
-	if isinstance(cpu_stats, dict):
-		all_cpu = cpu_stats.get('all', [])
-		per_cpu = cpu_stats.get('per_cpu', {})
-	else:
-		all_cpu = cpu_stats
-		per_cpu = {}
+	all_cpu, per_cpu = _split_cpu_stats(trace.cpu_stats)
+	proc_stat_metrics = getattr(trace, 'proc_stat_metrics', None) or {}
 
 	# render bar legend
 	ctx.set_font_size(LEGEND_FONT_SIZE)
@@ -341,10 +379,57 @@ def render_charts(ctx, options, clip, trace, curr_y, w, h, sec_w):
 			curr_y = curr_y + 30 + bar_h
 
 	# render second chart
-	draw_legend_line(ctx, "Disk throughput", _theme_color('disk_tput'), off_x, curr_y+20, leg_s)
-	draw_legend_box(ctx, "Disk utilization", _theme_color('io'), off_x + 120, curr_y+20, leg_s)
+	runnable = proc_stat_metrics.get('procs_running', [])
+	blocked = proc_stat_metrics.get('procs_blocked', [])
+	if runnable or blocked:
+		draw_legend_line(ctx, "Runnable tasks", _theme_color('cpu'), off_x, curr_y+20, leg_s)
+		draw_legend_line(ctx, "Blocked tasks", _theme_color('io'), off_x + 180, curr_y+20, leg_s)
 
-        # render I/O utilization
+		chart_rect = (off_x, curr_y+30, w, bar_h)
+		if clip_visible(clip, chart_rect):
+			draw_box_ticks(ctx, chart_rect, sec_w)
+			draw_annotations(ctx, proc_tree, trace.times, chart_rect)
+			queue_scale = _max_series_value(runnable, blocked)
+			if blocked:
+				draw_chart(ctx, _theme_color('io'), False, chart_rect, blocked, proc_tree, [0, queue_scale])
+			if runnable:
+				draw_chart(ctx, _theme_color('cpu'), False, chart_rect, runnable, proc_tree, [0, queue_scale])
+
+		curr_y = curr_y + 30 + bar_h
+
+	ctxt_rate = proc_stat_metrics.get('ctxt_rate', [])
+	intr_rate = proc_stat_metrics.get('intr_rate', [])
+	softirq_rate = proc_stat_metrics.get('softirq_rate', [])
+	if ctxt_rate or intr_rate or softirq_rate:
+		draw_legend_line(ctx, "Context switches/s", _theme_color('disk_tput'), off_x, curr_y+20, leg_s)
+		draw_legend_line(ctx, "Interrupts/s", _theme_color('file_open'), off_x + 220, curr_y+20, leg_s)
+		draw_legend_line(ctx, "SoftIRQ/s", _theme_color('io'), off_x + 400, curr_y+20, leg_s)
+
+		chart_rect = (off_x, curr_y+30, w, bar_h)
+		if clip_visible(clip, chart_rect):
+			draw_box_ticks(ctx, chart_rect, sec_w)
+			draw_annotations(ctx, proc_tree, trace.times, chart_rect)
+			rate_scale = _max_series_value(ctxt_rate, intr_rate, softirq_rate)
+			if ctxt_rate:
+				draw_chart(ctx, _theme_color('disk_tput'), False, chart_rect, ctxt_rate, proc_tree, [0, rate_scale])
+			if intr_rate:
+				draw_chart(ctx, _theme_color('file_open'), False, chart_rect, intr_rate, proc_tree, [0, rate_scale])
+			if softirq_rate:
+				draw_chart(ctx, _theme_color('io'), False, chart_rect, softirq_rate, proc_tree, [0, rate_scale])
+
+		curr_y = curr_y + 30 + bar_h
+
+	max_tput = _max_series_value(
+		[(sample.time, sample.read) for sample in trace.disk_stats],
+		[(sample.time, sample.write) for sample in trace.disk_stats])
+	if max_tput <= 0:
+		max_tput = 1.0
+	mb_scale = max_tput / 1024.0
+	draw_legend_line(ctx, "Disk read (scale: %.1f MB/s)" % mb_scale, _theme_color('disk_tput'), off_x, curr_y+20, leg_s)
+	draw_legend_line(ctx, "Disk write", _theme_color('file_open'), off_x + 250, curr_y+20, leg_s)
+	draw_legend_box(ctx, "Disk utilization", _theme_color('io'), off_x + 420, curr_y+20, leg_s)
+
+	# render I/O utilization
 	chart_rect = (off_x, curr_y+30, w, bar_h)
 	if clip_visible (clip, chart_rect):
 		draw_box_ticks (ctx, chart_rect, sec_w)
@@ -352,22 +437,12 @@ def render_charts(ctx, options, clip, trace, curr_y, w, h, sec_w):
 		draw_chart (ctx, _theme_color('io'), True, chart_rect, \
 			    [(sample.time, sample.util) for sample in trace.disk_stats], \
 			    proc_tree, None)
-
-	# render disk throughput
-	max_sample = max (trace.disk_stats, key = lambda s: s.tput)
-	if clip_visible (clip, chart_rect):
 		draw_chart (ctx, _theme_color('disk_tput'), False, chart_rect, \
-			    [(sample.time, sample.tput) for sample in trace.disk_stats], \
-			    proc_tree, None)
-
-	pos_x = off_x + ((max_sample.time - proc_tree.start_time) * w / proc_tree.duration)
-
-	shift_x, shift_y = -20, 20
-	if (pos_x < off_x + 245):
-		shift_x, shift_y = 5, 40
-
-	label = "%dMB/s" % round ((max_sample.tput) / 1024.0)
-	draw_text (ctx, label, _theme_color('disk_tput'), pos_x + shift_x, curr_y + shift_y)
+			    [(sample.time, sample.read) for sample in trace.disk_stats], \
+			    proc_tree, [0, max_tput])
+		draw_chart (ctx, _theme_color('file_open'), False, chart_rect, \
+			    [(sample.time, sample.write) for sample in trace.disk_stats], \
+			    proc_tree, [0, max_tput])
 
 	curr_y = curr_y + 30 + bar_h
 
@@ -468,6 +543,8 @@ def draw_process_bar_chart(ctx, clip, options, proc_tree, times, curr_y, w, h, s
 				 _theme_color('proc_sleeping'), off_x+240, curr_y + 45, leg_s)
 		draw_legend_box (ctx, "Zombie",
 				 _theme_color('proc_zombie'), off_x+360, curr_y + 45, leg_s)
+		draw_legend_box (ctx, "Idle kthread",
+				 _theme_color('proc_idle'), off_x+480, curr_y + 45, leg_s)
 		header_size = 45
 
 	chart_rect = [off_x, curr_y + header_size + 15,

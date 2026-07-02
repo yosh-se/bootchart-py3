@@ -151,6 +151,10 @@ def process_matches_search(proc, search_term):
 
 	return any(term in value for value in haystacks)
 
+
+def _should_draw_parent_connector(parent_proc):
+	return parent_proc is not None and parent_proc.pid // 1000 != 1
+
 # Convert ps process state to an int
 def get_proc_state(flag):
 	return {
@@ -304,6 +308,7 @@ proc_h = 16 # the height of a process
 leg_s = 10
 MIN_IMG_W = 800
 CUML_HEIGHT = 2000 # Increased value to accomodate CPU and I/O Graphs
+UNRELATED_PROC_GAP = 5
 OPTIONS = None
 
 
@@ -339,6 +344,41 @@ def _max_series_value(*series_list):
 	return max(values)
 
 
+def _iter_processes_preorder(processes):
+	for proc in processes:
+		yield proc
+		for child in _iter_processes_preorder(proc.child_list):
+			yield child
+
+
+def _has_direct_parent_transition(prev_proc, proc):
+	return getattr(proc, 'parent', None) is prev_proc
+
+
+def _count_process_row_gaps(proc_tree):
+	prev_proc = None
+	gaps = 0
+	for proc in _iter_processes_preorder(proc_tree.process_tree):
+		if prev_proc is not None and not _has_direct_parent_transition(prev_proc, proc):
+			gaps += 1
+		prev_proc = proc
+	return gaps
+
+
+def _build_process_y_positions(proc_tree, start_y):
+	y_positions = {}
+	prev_proc = None
+	current_y = start_y
+	for proc in _iter_processes_preorder(proc_tree.process_tree):
+		if prev_proc is not None:
+			current_y += proc_h
+			if not _has_direct_parent_transition(prev_proc, proc):
+				current_y += UNRELATED_PROC_GAP
+		y_positions[proc] = current_y
+		prev_proc = proc
+	return y_positions
+
+
 def _clip_extents_to_rect(clip_extents):
 	x1, y1, x2, y2 = clip_extents
 	return (x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1))
@@ -346,7 +386,7 @@ def _clip_extents_to_rect(clip_extents):
 def extents(options, xscale, trace):
 	proc_tree = options.proc_tree(trace)
 	w = int (proc_tree.duration * sec_w_base * xscale / 100) + 2*off_x
-	h = proc_h * proc_tree.num_proc + 2 * off_y
+	h = proc_h * proc_tree.num_proc + _count_process_row_gaps(proc_tree) * UNRELATED_PROC_GAP + 2 * off_y
 	if options.charts:
 		h += _chart_stack_height(trace)
 	if proc_tree.taskstats and options.cumulative:
@@ -594,10 +634,11 @@ def draw_process_bar_chart(ctx, clip, options, proc_tree, times, curr_y, w, h, s
 	draw_sec_labels (ctx, chart_rect, sec_w, nsec)
 	draw_annotations (ctx, proc_tree, times, chart_rect)
 
-	y = curr_y + 60
+	y_positions = _build_process_y_positions(proc_tree, curr_y + 60)
 	for root in proc_tree.process_tree:
-		draw_processes_recursively(ctx, root, proc_tree, y, proc_h, chart_rect, clip)
-		y = y + proc_h * proc_tree.num_nodes([root])
+		if y_positions[root] > clip[1] + clip[3]:
+			break
+		draw_processes_recursively(ctx, root, proc_tree, y_positions, proc_h, chart_rect, clip)
 
 
 def draw_header (ctx, headers, duration):
@@ -632,9 +673,10 @@ def draw_header (ctx, headers, duration):
 
 	return header_y
 
-def draw_processes_recursively(ctx, proc, proc_tree, y, proc_h, rect, clip) :
+def draw_processes_recursively(ctx, proc, proc_tree, y_positions, proc_h, rect, clip) :
 	x = rect[0] +  ((proc.start_time - proc_tree.start_time) * rect[2] / proc_tree.duration)
 	w = ((proc.duration) * rect[2] / proc_tree.duration)
+	y = y_positions[proc]
 	highlighted = process_matches_search(proc, getattr(OPTIONS, 'process_search', ''))
 
 	draw_process_activity_colors(ctx, proc, proc_tree, x, y, w, proc_h, rect, clip)
@@ -661,13 +703,13 @@ def draw_processes_recursively(ctx, proc, proc_tree, y, proc_h, rect, clip) :
 	label_color = _search_highlight_color() if highlighted else _theme_color('proc_text')
 	draw_label_in_box(ctx, label_color, cmdString, x, y + proc_h - 4, w, rect[0] + rect[2])
 
-	next_y = y + proc_h
 	for child in proc.child_list:
-		if next_y > clip[1] + clip[3]:
+		child_y = y_positions[child]
+		if child_y > clip[1] + clip[3]:
 			break
-		child_x, child_y = draw_processes_recursively(ctx, child, proc_tree, next_y, proc_h, rect, clip)
-		draw_process_connecting_lines(ctx, x, y, child_x, child_y, proc_h)
-		next_y = next_y + proc_h * proc_tree.num_nodes([child])
+		child_x, child_y = draw_processes_recursively(ctx, child, proc_tree, y_positions, proc_h, rect, clip)
+		if _should_draw_parent_connector(proc):
+			draw_process_connecting_lines(ctx, x, y, child_x, child_y, proc_h)
 
 	return x, y
 

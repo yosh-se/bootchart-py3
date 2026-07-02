@@ -7,6 +7,7 @@ sys.path.insert(0, os.getcwd())
 import pybootchartgui.parsing as parsing
 import pybootchartgui.process_tree as process_tree
 import pybootchartgui.main as main
+from pybootchartgui.samples import Process
 
 if sys.version_info >= (3, 0):
     long = int
@@ -100,6 +101,37 @@ class TestProcessTree(unittest.TestCase):
         self.processtree.merge_runs(self.processtree.process_tree)
         process_tree = self.processtree.process_tree
         self.checkAgainstJavaExtract(self.mk_fname('extract.processtree.3e.log'), process_tree)
+
+    def testMergeSiblingsKeepsSeparateSubtrees(self):
+        syslog1 = Process(self.writer, 287000, 'syslog-ng', 1000, 0)
+        syslog2 = Process(self.writer, 289000, 'syslog-ng', 1000, 0)
+        child1 = Process(self.writer, 291000, 'syslog-child-a', 287000, 0)
+        child2 = Process(self.writer, 300000, 'syslog-child-b', 289000, 0)
+
+        syslog1.child_list = [child1]
+        syslog2.child_list = [child2]
+        child1.parent = syslog1
+        child2.parent = syslog2
+        syslog1.active = True
+        syslog2.active = True
+
+        process_subtree = [syslog1, syslog2]
+        removed = self.processtree.merge_siblings(process_subtree)
+
+        self.assertEqual(0, removed)
+        self.assertEqual(2, len(process_subtree))
+        self.assertEqual([291000], [child.pid for child in process_subtree[0].child_list])
+        self.assertEqual([300000], [child.pid for child in process_subtree[1].child_list])
+
+    def testMergeSiblingsStillMergesLeafTwins(self):
+        worker1 = Process(self.writer, 10000, 'kworker', 2000, 0)
+        worker2 = Process(self.writer, 10001, 'kworker', 2000, 5)
+        process_subtree = [worker1, worker2]
+
+        removed = self.processtree.merge_siblings(process_subtree)
+
+        self.assertEqual(1, removed)
+        self.assertEqual(1, len(process_subtree))
 
 if __name__ == '__main__':
     unittest.main()

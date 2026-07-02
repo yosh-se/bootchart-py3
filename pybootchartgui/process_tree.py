@@ -246,12 +246,17 @@ class ProcessTree:
            line are merged together.
 
         """
+        def should_merge_siblings(p, nextp):
+                return nextp.cmd == p.cmd and \
+                         not (p.active and nextp.active and \
+                                len(p.child_list) > 0 and len(nextp.child_list) > 0)
+
         num_removed = 0
         idx = 0
         while idx < len(process_subtree)-1:
             p = process_subtree[idx]
             nextp = process_subtree[idx+1]
-            if nextp.cmd == p.cmd:
+            if should_merge_siblings(p, nextp):
                 process_subtree.pop(idx+1)
                 idx -= 1
                 num_removed += 1

@@ -82,6 +82,19 @@ STATE_PAGING    = 8
 STAT_TYPE_CPU = 0
 STAT_TYPE_IO = 1
 
+PROCESS_STATE_INFO = (
+	('R', STATE_RUNNING, 'Running (%cpu)', 'Running samples', 'proc_running'),
+	('D', STATE_WAITING, 'Blocking', 'Blocking samples', 'proc_waiting'),
+	('S', STATE_SLEEPING, 'Sleeping', 'Sleeping samples', 'proc_sleeping'),
+	('T', STATE_STOPPED, 'Stopped', 'Stopped samples', 'proc_stopped'),
+	('Z', STATE_ZOMBIE, 'Zombie', 'Zombie samples', 'proc_zombie'),
+	('I', STATE_IDLE, 'Idle kthread', 'Idle samples', 'proc_idle'),
+	('X', STATE_DEAD, 'Dead', 'Dead samples', 'proc_dead'),
+	('W', STATE_PAGING, 'Paging', 'Paging samples', 'proc_paging'),
+)
+
+PROCESS_STATE_BY_FLAG = dict((flag, (state, legend_label, sidebar_label, color_name)) for flag, state, legend_label, sidebar_label, color_name in PROCESS_STATE_INFO)
+
 THEME = themes.load_theme(themes.DEFAULT_THEME_NAME)
 
 
@@ -128,6 +141,11 @@ def _search_highlight_color():
 	return (color[0], color[1], color[2], 1.0)
 
 
+def _selection_highlight_color():
+	color = _theme_color('disk_tput')
+	return (color[0], color[1], color[2], 1.0)
+
+
 def process_matches_search(proc, search_term):
 	term = (search_term or '').strip().lower()
 	if not term:
@@ -154,6 +172,34 @@ def process_matches_search(proc, search_term):
 
 def _should_draw_parent_connector(parent_proc):
 	return parent_proc is not None and parent_proc.pid // 1000 != 1
+
+
+def _is_selected_process(proc):
+	return getattr(OPTIONS, 'selected_process_pid', None) == proc.pid
+
+
+def _process_block_rect(proc, proc_tree, y_positions, rect):
+	x = rect[0] + ((proc.start_time - proc_tree.start_time) * rect[2] / proc_tree.duration)
+	w = ((proc.duration) * rect[2] / proc_tree.duration)
+	y = y_positions[proc]
+	return (x, y, w, proc_h)
+
+
+def _draw_process_state_legend(ctx, curr_y):
+	columns = 4
+	column_width = 165
+	row_height = 22
+	legend_y = curr_y + 25
+	for idx, (_, _, legend_label, _, color_name) in enumerate(PROCESS_STATE_INFO):
+		row = idx // columns
+		col = idx % columns
+		draw_legend_box(ctx, legend_label,
+				 _theme_color(color_name),
+				 off_x + col * column_width,
+				 legend_y + row * row_height,
+				 leg_s)
+	rows = int(math.ceil(float(len(PROCESS_STATE_INFO)) / columns))
+	return 20 + rows * row_height
 
 # Convert ps process state to an int
 def get_proc_state(flag):
@@ -553,11 +599,14 @@ def render_charts(ctx, options, clip, trace, curr_y, w, h, sec_w):
 #
 # Render the chart.
 #
-def render(ctx, options, xscale, trace):
+def render(ctx, options, xscale, trace, render_state=None):
 	(w, h) = extents (options, xscale, trace)
 	global OPTIONS, THEME
 	OPTIONS = options.app_options
 	THEME = _load_render_theme(OPTIONS)
+	if render_state is not None:
+		render_state.clear()
+		render_state['process_bounds'] = []
 
 	proc_tree = options.proc_tree (trace)
 
@@ -589,7 +638,7 @@ def render(ctx, options, xscale, trace):
 		proc_height -= CUML_HEIGHT
 
 	draw_process_bar_chart(ctx, clip, options, proc_tree, trace.times,
-			       curr_y, w, proc_height, sec_w)
+			       curr_y, w, proc_height, sec_w, render_state)
 
 	curr_y = proc_height
 	ctx.set_font_size(SIG_FONT_SIZE)
@@ -607,20 +656,10 @@ def render(ctx, options, xscale, trace):
 		if clip_visible (clip, cuml_rect):
 			draw_cuml_graph(ctx, proc_tree, cuml_rect, duration, sec_w, STAT_TYPE_IO)
 
-def draw_process_bar_chart(ctx, clip, options, proc_tree, times, curr_y, w, h, sec_w):
+def draw_process_bar_chart(ctx, clip, options, proc_tree, times, curr_y, w, h, sec_w, render_state=None):
 	header_size = 0
 	if not options.kernel_only:
-		draw_legend_box (ctx, "Running (%cpu)",
-				 _theme_color('proc_running'), off_x    , curr_y + 45, leg_s)
-		draw_legend_box (ctx, "Unint.sleep (I/O)",
-				 _theme_color('proc_waiting'), off_x+120, curr_y + 45, leg_s)
-		draw_legend_box (ctx, "Sleeping",
-				 _theme_color('proc_sleeping'), off_x+240, curr_y + 45, leg_s)
-		draw_legend_box (ctx, "Zombie",
-				 _theme_color('proc_zombie'), off_x+360, curr_y + 45, leg_s)
-		draw_legend_box (ctx, "Idle kthread",
-				 _theme_color('proc_idle'), off_x+480, curr_y + 45, leg_s)
-		header_size = 45
+		header_size = _draw_process_state_legend(ctx, curr_y)
 
 	chart_rect = [off_x, curr_y + header_size + 15,
 		      w, h - 2 * off_y - (curr_y + header_size + 15) + proc_h]
@@ -634,11 +673,11 @@ def draw_process_bar_chart(ctx, clip, options, proc_tree, times, curr_y, w, h, s
 	draw_sec_labels (ctx, chart_rect, sec_w, nsec)
 	draw_annotations (ctx, proc_tree, times, chart_rect)
 
-	y_positions = _build_process_y_positions(proc_tree, curr_y + 60)
+	y_positions = _build_process_y_positions(proc_tree, curr_y + header_size + 15)
 	for root in proc_tree.process_tree:
 		if y_positions[root] > clip[1] + clip[3]:
 			break
-		draw_processes_recursively(ctx, root, proc_tree, y_positions, proc_h, chart_rect, clip)
+		draw_processes_recursively(ctx, root, proc_tree, y_positions, proc_h, chart_rect, clip, render_state)
 
 
 def draw_header (ctx, headers, duration):
@@ -673,14 +712,21 @@ def draw_header (ctx, headers, duration):
 
 	return header_y
 
-def draw_processes_recursively(ctx, proc, proc_tree, y_positions, proc_h, rect, clip) :
-	x = rect[0] +  ((proc.start_time - proc_tree.start_time) * rect[2] / proc_tree.duration)
-	w = ((proc.duration) * rect[2] / proc_tree.duration)
-	y = y_positions[proc]
+def draw_processes_recursively(ctx, proc, proc_tree, y_positions, proc_h, rect, clip, render_state=None) :
+	x, y, w, h = _process_block_rect(proc, proc_tree, y_positions, rect)
 	highlighted = process_matches_search(proc, getattr(OPTIONS, 'process_search', ''))
+	selected = _is_selected_process(proc)
+	if render_state is not None:
+		render_state['process_bounds'].append((proc, (x, y, w, h)))
 
 	draw_process_activity_colors(ctx, proc, proc_tree, x, y, w, proc_h, rect, clip)
 	draw_rect(ctx, _theme_color('proc_border'), (x, y, w, proc_h))
+	if selected:
+		selection_color = _selection_highlight_color()
+		draw_fill_rect(ctx, selection_color, (x, y + proc_h - 3, min(max(w, 1), 8), 3))
+		ctx.set_line_width(2.0)
+		draw_rect(ctx, selection_color, (x, y, w, proc_h))
+		ctx.set_line_width(1.0)
 	if highlighted:
 		highlight_color = _search_highlight_color()
 		draw_fill_rect(ctx, highlight_color, (x, y, min(max(w, 1), 3), proc_h))
@@ -707,7 +753,7 @@ def draw_processes_recursively(ctx, proc, proc_tree, y_positions, proc_h, rect, 
 		child_y = y_positions[child]
 		if child_y > clip[1] + clip[3]:
 			break
-		child_x, child_y = draw_processes_recursively(ctx, child, proc_tree, y_positions, proc_h, rect, clip)
+		child_x, child_y = draw_processes_recursively(ctx, child, proc_tree, y_positions, proc_h, rect, clip, render_state)
 		if _should_draw_parent_connector(proc):
 			draw_process_connecting_lines(ctx, x, y, child_x, child_y, proc_h)
 

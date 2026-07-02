@@ -40,6 +40,11 @@ class TestDraw(unittest.TestCase):
 		self.assertFalse(draw._should_draw_parent_connector(DummyProc('init', pid=1000)))
 		self.assertTrue(draw._should_draw_parent_connector(DummyProc('service', pid=2000)))
 
+	def test_process_state_info_covers_all_known_states(self):
+		self.assertEqual(['R', 'D', 'S', 'T', 'Z', 'I', 'X', 'W'], [flag for flag, _state, _legend, _sidebar, _color in draw.PROCESS_STATE_INFO])
+		self.assertEqual(draw.STATE_STOPPED, draw.PROCESS_STATE_BY_FLAG['T'][0])
+		self.assertEqual('Stopped', draw.PROCESS_STATE_BY_FLAG['T'][1])
+
 
 if __name__ == '__main__':
 	unittest.main()

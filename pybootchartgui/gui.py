@@ -13,6 +13,7 @@
 #  You should have received a copy of the GNU General Public License
 #  along with pybootchartgui. If not, see <http://www.gnu.org/licenses/>.
 
+import math
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
@@ -21,6 +22,24 @@ from gi.repository import Gtk, Gdk, GObject
 from . import draw
 from . import themes
 from .draw import RenderOptions
+
+
+def _zoom_origin_for_focus(origin, focus, old_zoom, new_zoom):
+    return origin + (focus / old_zoom) - (focus / new_zoom)
+
+
+def _pointer_zoom_event_mask():
+    return Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK
+
+
+def _zoom_ratio_for_scroll(current_zoom, direction, delta_y, zoom_increment):
+    if direction == Gdk.ScrollDirection.UP:
+        return current_zoom * zoom_increment
+    if direction == Gdk.ScrollDirection.DOWN:
+        return current_zoom / zoom_increment
+    if direction == Gdk.ScrollDirection.SMOOTH and abs(delta_y) > 0.01:
+        return current_zoom * math.pow(zoom_increment, -delta_y)
+    return None
 
 class PyBootchartWidget(Gtk.DrawingArea):
     __gsignals__ = {
@@ -36,6 +55,7 @@ class PyBootchartWidget(Gtk.DrawingArea):
         self.options = options
 
         self.set_can_focus(True)
+        self.add_events(_pointer_zoom_event_mask())
 
         self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK)
         self.connect("button-press-event", self.on_area_button_press)
@@ -77,9 +97,29 @@ class PyBootchartWidget(Gtk.DrawingArea):
 
     ZOOM_INCREMENT = 1.25
 
-    def zoom_image(self, zoom_ratio):
+    def _default_zoom_focus(self):
+        allocation = self.get_allocation()
+        return allocation.width / 2.0, allocation.height / 2.0
+
+    def _clamp_view_origin(self, origin, adj):
+        if adj is None:
+            return max(0.0, origin)
+        max_origin = max(0.0, (adj.get_upper() - adj.get_page_size()) / self.zoom_ratio)
+        return min(max(origin, 0.0), max_origin)
+
+    def zoom_image(self, zoom_ratio, focus_x=None, focus_y=None):
+        old_zoom = self.zoom_ratio
+        if focus_x is None or focus_y is None:
+            focus_x, focus_y = self._default_zoom_focus()
+
+        target_x = _zoom_origin_for_focus(self.x, focus_x, old_zoom, zoom_ratio)
+        target_y = _zoom_origin_for_focus(self.y, focus_y, old_zoom, zoom_ratio)
+
         self.zoom_ratio = zoom_ratio
         self._set_scroll_adjustments(self.hadj, self.vadj)
+        self.x = self._clamp_view_origin(target_x, self.hadj)
+        self.y = self._clamp_view_origin(target_y, self.vadj)
+        self.position_changed()
         self.queue_draw()
 
     def zoom_to_rect(self, rect):
@@ -166,13 +206,16 @@ class PyBootchartWidget(Gtk.DrawingArea):
         return False
 
     def on_area_scroll_event(self, area, event):
-        if event.state & Gdk.ModifierType.CONTROL_MASK:
-            if event.direction == Gdk.ScrollDirection.UP:
-                self.zoom_image(self.zoom_ratio * self.ZOOM_INCREMENT)
-                return True
-            if event.direction == Gdk.ScrollDirection.DOWN:
-                self.zoom_image(self.zoom_ratio / self.ZOOM_INCREMENT)
-                return True
+        delta_y = 0.0
+        if event.direction == Gdk.ScrollDirection.SMOOTH:
+            success, delta_x, delta_y = event.get_scroll_deltas()
+            if not success:
+                return False
+
+        new_zoom = _zoom_ratio_for_scroll(self.zoom_ratio, event.direction, delta_y, self.ZOOM_INCREMENT)
+        if new_zoom is not None:
+            self.zoom_image(new_zoom, event.x, event.y)
+            return True
         return False
 
     def on_area_motion_notify(self, area, event):
